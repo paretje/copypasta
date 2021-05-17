@@ -13,18 +13,16 @@
 // limitations under the License.
 
 use std::ffi::c_void;
-use std::sync::{Arc, Mutex};
+use std::io::Read;
 
-use smithay_clipboard::Clipboard as WaylandClipboard;
+use wl_clipboard_rs::{copy, paste};
 
 use crate::common::{ClipboardProvider, Result};
 
 pub struct Clipboard {
-    context: Arc<Mutex<WaylandClipboard>>,
 }
 
 pub struct Primary {
-    context: Arc<Mutex<WaylandClipboard>>,
 }
 
 /// Create new clipboard from a raw display pointer.
@@ -34,18 +32,29 @@ pub struct Primary {
 /// Since the type of the display is a raw pointer, it's the responsibility of the callee to make
 /// sure that the passed pointer is a valid Wayland display.
 pub unsafe fn create_clipboards_from_external(display: *mut c_void) -> (Primary, Clipboard) {
-    let context = Arc::new(Mutex::new(WaylandClipboard::new(display)));
-
-    (Primary { context: context.clone() }, Clipboard { context })
+    (Primary {}, Clipboard {})
 }
 
 impl ClipboardProvider for Clipboard {
     fn get_contents(&mut self) -> Result<String> {
-        Ok(self.context.lock().unwrap().load()?)
+        let result = paste::get_contents(paste::ClipboardType::Regular, paste::Seat::Unspecified, paste::MimeType::Text);
+        match result {
+            Ok((mut pipe, _)) => {
+                let mut contents = String::new();
+                pipe.read_to_string(&mut contents)?;
+                Ok(contents)
+            }
+            Err(paste::Error::NoSeats) | Err(paste::Error::ClipboardEmpty) | Err(paste::Error::NoMimeType) => {
+                Ok("".to_owned())
+            }
+            Err(err) => Err("get_contents returned error".into())
+        }
     }
 
     fn set_contents(&mut self, data: String) -> Result<()> {
-        self.context.lock().unwrap().store(data);
+        let mut opts = copy::Options::new();
+        opts.clipboard(copy::ClipboardType::Regular);
+        opts.copy(copy::Source::Bytes(data.into_bytes().into()), copy::MimeType::Text);
 
         Ok(())
     }
@@ -53,12 +62,10 @@ impl ClipboardProvider for Clipboard {
 
 impl ClipboardProvider for Primary {
     fn get_contents(&mut self) -> Result<String> {
-        Ok(self.context.lock().unwrap().load_primary()?)
+        Ok("".to_owned())
     }
 
     fn set_contents(&mut self, data: String) -> Result<()> {
-        self.context.lock().unwrap().store_primary(data);
-
         Ok(())
     }
 }
