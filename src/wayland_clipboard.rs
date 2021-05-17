@@ -14,15 +14,15 @@
 
 use std::ffi::c_void;
 use std::io::Read;
+use std::io::Write;
+use std::process::Stdio;
 
-use wl_clipboard_rs::{copy, paste};
+use wl_clipboard_rs::paste;
 
 use crate::common::{ClipboardProvider, Result};
 
-pub struct Clipboard {
-}
-
-pub struct Primary {
+pub struct WaylandClipboardContext {
+    clipboard: paste::ClipboardType,
 }
 
 /// Create new clipboard from a raw display pointer.
@@ -31,13 +31,16 @@ pub struct Primary {
 ///
 /// Since the type of the display is a raw pointer, it's the responsibility of the callee to make
 /// sure that the passed pointer is a valid Wayland display.
-pub unsafe fn create_clipboards_from_external(display: *mut c_void) -> (Primary, Clipboard) {
-    (Primary {}, Clipboard {})
+pub unsafe fn create_clipboards_from_external(_display: *mut c_void) -> (WaylandClipboardContext, WaylandClipboardContext) {
+    (
+        WaylandClipboardContext { clipboard: paste::ClipboardType::Primary },
+        WaylandClipboardContext { clipboard: paste::ClipboardType::Regular }
+    )
 }
 
-impl ClipboardProvider for Clipboard {
+impl ClipboardProvider for WaylandClipboardContext   {
     fn get_contents(&mut self) -> Result<String> {
-        let result = paste::get_contents(paste::ClipboardType::Regular, paste::Seat::Unspecified, paste::MimeType::Text);
+        let result = paste::get_contents(self.clipboard, paste::Seat::Unspecified, paste::MimeType::Text);
         match result {
             Ok((mut pipe, _)) => {
                 let mut contents = String::new();
@@ -47,25 +50,21 @@ impl ClipboardProvider for Clipboard {
             Err(paste::Error::NoSeats) | Err(paste::Error::ClipboardEmpty) | Err(paste::Error::NoMimeType) => {
                 Ok("".to_owned())
             }
-            Err(err) => Err("get_contents returned error".into())
+            // TODO: show error
+            Err(_) => Err("get_contents returned error".into())
         }
     }
 
     fn set_contents(&mut self, data: String) -> Result<()> {
-        let mut opts = copy::Options::new();
-        opts.clipboard(copy::ClipboardType::Regular);
-        opts.copy(copy::Source::Bytes(data.into_bytes().into()), copy::MimeType::Text);
+        let mut command = std::process::Command::new("wl-copy");
+        if self.clipboard == paste::ClipboardType::Primary {
+            command.arg("--primary");
+        }
+        command.stdin(Stdio::piped());
 
-        Ok(())
-    }
-}
-
-impl ClipboardProvider for Primary {
-    fn get_contents(&mut self) -> Result<String> {
-        Ok("".to_owned())
-    }
-
-    fn set_contents(&mut self, data: String) -> Result<()> {
+        let mut child = command.spawn()?;
+        child.stdin.take().unwrap().write_all(data.as_bytes())?;
+        child.wait()?;
         Ok(())
     }
 }
